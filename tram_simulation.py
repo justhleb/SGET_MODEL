@@ -187,6 +187,8 @@ class TramSimulation:
         self.simulation_hours = config['simulation_hours']
         self.acceleration_time = config.get('acceleration_time', 0.5)
         self.stop_time = config.get('stop_time', 1.0)
+        self.operation_start_hour = config.get('operation_start_hour', 6)
+        self.operation_end_hour = config.get('operation_end_hour', 24)
         
         self.intensity_map = defaultdict(dict)
         for stop_id, hour, intensity in config['intensity']:
@@ -293,20 +295,46 @@ class TramSimulation:
         yield self.env.timeout(total_stop_time)
 
     def tram_generator(self):
-        """Генератор трамваев - процесс SimPy"""
+        """Генератор выхода трамваев на маршрут"""
         while True:
-            interval = self.get_current_interval(self.env.now)
+            current_hour = int(self.env.now // 60) % 24
             
-            # Пытаемся получить доступный трамвай из пула
+            # Проверяем, в рабочих ли часах
+            if not self._is_operating_hour(current_hour):
+                # Ждём до начала работы
+                minutes_to_wait = self._minutes_until_operation_start(current_hour)
+                if minutes_to_wait > 0:
+                    yield self.env.timeout(minutes_to_wait)
+                continue
+            
+            interval = self.get_current_interval(self.env.now)
             tram = yield self.available_trams.get()
             
-            # Запускаем трамвай на маршрут
-            print(f"[{self.env.now:.1f}] Трамвай #{tram.tram_id} выехал на маршрут "
-                  f"(рейс #{tram.stats.total_trips + 1})")
+            print(f"[{self.env.now:.1f}] Трамвай #{tram.tram_id} выехал на маршрут (рейс #{tram.stats.total_trips + 1})")
             self.env.process(self.tram_process(tram))
             
-            # Ждём до следующего запуска
             yield self.env.timeout(interval)
+
+    def _is_operating_hour(self, hour: int) -> bool:
+        """Проверяет, входит ли час в рабочее время"""
+        if self.operation_end_hour > self.operation_start_hour:
+            # Обычный случай: 6-24
+            return self.operation_start_hour <= hour < self.operation_end_hour
+        else:
+            # Ночной режим (например, 22-6)
+            return hour >= self.operation_start_hour or hour < self.operation_end_hour
+
+    def _minutes_until_operation_start(self, current_hour: int) -> float:
+        """Рассчитывает минуты до начала работы"""
+        if current_hour < self.operation_start_hour:
+            # До начала работы в этот же день
+            hours_to_wait = self.operation_start_hour - current_hour
+        else:
+            # До начала работы на следующий день
+            hours_to_wait = (24 - current_hour) + self.operation_start_hour
+        
+        current_minute = self.env.now % 60
+        return hours_to_wait * 60 - current_minute
     
     def create_initial_trams(self, count: int = 20):
         """Создаёт начальный парк трамваев"""

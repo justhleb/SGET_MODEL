@@ -22,10 +22,9 @@ def generate_intensity_data(stop_number: int,
     if base_intensities is None:
         base_intensities = []
         for i in range(1, stop_number + 1):
-            # УВЕЛИЧИВАЕМ базовую интенсивность в 3-4 раза
             center = stop_number / 2
             distance_from_center = abs(i - center)
-            base = 80 + int((stop_number - distance_from_center) * 5)  # было 100 + 10
+            base = 20 + int((stop_number - distance_from_center) * 2) 
             base_intensities.append(base)
     
     time_coefficients = {
@@ -56,13 +55,12 @@ def generate_bus_intervals(peak_hours: List[Tuple[int, int]] = None) -> List[Lis
     if peak_hours is None:
         # УВЕЛИЧИВАЕМ интервалы - меньше трамваев
         return [
-            [0, 120],  # Ночь - каждые 2 часа (было 60)
-            [6, 30],   # Утро - каждые 30 минут (было 20)
-            [8, 15],   # Час пик - каждые 15 минут (было 8)
-            [10, 20],  # День - каждые 20 минут (было 15)
-            [17, 15],  # Вечерний час пик - каждые 15 минут (было 8)
-            [20, 30],  # Вечер - каждые 30 минут (было 20)
-            [23, 120]  # Ночь - каждые 2 часа (было 60)
+            [6, 18],   # Утро - каждые 30 минут (было 20)
+            [8, 8],   # Час пик - каждые 15 минут (было 8)
+            [10, 15],  # День - каждые 20 минут (было 15)
+            [17, 8],  # Вечерний час пик - каждые 15 минут (было 8)
+            [20, 20],  # Вечер - каждые 30 минут (было 20)
+            [23, 30]  # Ночь - каждые 2 часа (было 60)
         ]
     else:
         return peak_hours
@@ -71,12 +69,6 @@ def generate_bus_intervals(peak_hours: List[Tuple[int, int]] = None) -> List[Lis
 def generate_road_loads(peak_hours: List[int] = None) -> List[List[float]]:
     """
     Генерирует данные о загруженности дорог
-    
-    Args:
-        peak_hours: список часов с максимальной загруженностью
-    
-    Returns:
-        List of [hour, load_factor (0-1)]
     """
     if peak_hours is None:
         peak_hours = [8, 9, 17, 18]  # Часы пик по умолчанию
@@ -104,14 +96,6 @@ def generate_distances(stop_number: int,
                       max_distance: int = 800) -> List[List[int]]:
     """
     Генерирует расстояния между остановками
-    
-    Args:
-        stop_number: количество остановок
-        min_distance: минимальное расстояние в метрах
-        max_distance: максимальное расстояние в метрах
-    
-    Returns:
-        List of [stop_id, distance_from_previous]
     """
     import random
     
@@ -130,10 +114,8 @@ def save_config_compact(config: dict, output_file: str):
     """
     Сохраняет конфигурацию в компактном читаемом формате
     """
-    # Убедимся, что папка существует
     ensure_config_dir()
     
-    # ИЗМЕНЕНИЕ: сохраняем в папку configs/
     if not output_file.startswith(CONFIG_DIR):
         output_file = os.path.join(CONFIG_DIR, os.path.basename(output_file))
     
@@ -170,7 +152,14 @@ def save_config_compact(config: dict, output_file: str):
     lines.append(f'  "flow_speed": {config["flow_speed"]},')
     lines.append(f'  "peak_stop": {config["peak_stop"]},')
     lines.append(f'  "tram_capacity": {config["tram_capacity"]},')
+    
+    # НОВОЕ: рабочие часы
+    lines.append(f'  "operation_start_hour": {config["operation_start_hour"]},')
+    lines.append(f'  "operation_end_hour": {config["operation_end_hour"]},')
+    
+    # ОСТАВЛЯЕМ simulation_hours для длительности всей симуляции
     lines.append(f'  "simulation_hours": {config["simulation_hours"]},')
+    
     lines.append(f'  "acceleration_time": {config["acceleration_time"]},')
     lines.append(f'  "stop_time": {config["stop_time"]}')
     
@@ -188,10 +177,10 @@ def create_config(stop_number: int = 10,
                  simulation_hours: int = 24,
                  flow_speed: int = 40,
                  peak_stop: int = None,
+                 operation_start_hour: int = 6,  
+                 operation_end_hour: int = 24,  
                  output_file: str = "tram_config.json") -> dict:
-    """
-    Создаёт полную конфигурацию и сохраняет в JSON
-    """
+    
     if peak_stop is None:
         peak_stop = (stop_number + 1) // 2
     
@@ -206,60 +195,14 @@ def create_config(stop_number: int = 10,
         "tram_capacity": tram_capacity,
         "simulation_hours": simulation_hours,
         "acceleration_time": 0.5,
-        "stop_time": 1.0
-    }
-    
-    # ИСПОЛЬЗУЕМ НОВУЮ ФУНКЦИЮ
-    save_config_compact(config, output_file)
-    
-    print(f"  • Остановок: {stop_number}")
-    print(f"  • Вместимость трамвая: {tram_capacity} чел.")
-    print(f"  • Длительность симуляции: {simulation_hours} ч.")
-    print(f"  • Записей интенсивности: {len(config['intensity'])}")
-    
-    return config
-
-
-
-def create_custom_config(stop_number: int,
-                        base_intensities: List[int],
-                        distances: List[int],
-                        peak_stop: int,
-                        output_file: str = "custom_config.json"):
-    """
-    Создаёт кастомную конфигурацию с заданными параметрами
-    
-    Args:
-        stop_number: количество остановок
-        base_intensities: список базовых интенсивностей для каждой остановки
-        distances: список расстояний между остановками (в метрах)
-        peak_stop: номер самой популярной остановки
-        output_file: имя выходного файла
-    """
-    # Преобразуем distances в нужный формат
-    distance_data = [[1, 0]]  # Первая остановка
-    for i, dist in enumerate(distances, start=2):
-        distance_data.append([i, dist])
-    
-    config = {
-        "stop_number": stop_number,
-        "distance": distance_data,
-        "intensity": generate_intensity_data(stop_number, base_intensities),
-        "bus_interval": generate_bus_intervals(),
-        "road_loads": generate_road_loads(),
-        "flow_speed": 40,
-        "peak_stop": peak_stop,
-        "tram_capacity": 150,
-        "simulation_hours": 24,
-        "acceleration_time": 0.5,
-        "stop_time": 1.0
+        "stop_time": 1.0,
+        "operation_start_hour": operation_start_hour,  
+        "operation_end_hour": operation_end_hour       
     }
     
     save_config_compact(config, output_file)
-    
-    print(f"Кастомная конфигурация сохранена в {output_file}")
-    
     return config
+
 
 # Примеры использования
 if __name__ == "__main__":
@@ -275,7 +218,7 @@ if __name__ == "__main__":
     print("1. Создаём простую тестовую конфигурацию...")
     create_config(
         stop_number=5,
-        tram_capacity=120,
+        tram_capacity=90,
         simulation_hours=2,
         output_file="tram_config_simple.json"
     )
@@ -285,7 +228,7 @@ if __name__ == "__main__":
     print("2. Создаём стандартную конфигурацию...")
     create_config(
         stop_number=10,
-        tram_capacity=120,
+        tram_capacity=90,
         simulation_hours=24,
         output_file="tram_config.json"
     )
@@ -295,7 +238,7 @@ if __name__ == "__main__":
     print("3. Создаём расширенную конфигурацию...")
     create_config(
         stop_number=15,
-        tram_capacity=120,
+        tram_capacity=90,
         simulation_hours=24,
         output_file="tram_config_large.json"
     )
