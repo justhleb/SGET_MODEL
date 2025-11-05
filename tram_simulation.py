@@ -118,8 +118,8 @@ class Tram:
         return alighting
     
     def log_stop_event(self, time: float, stop_id: int, direction: str,
-                       waiting_before: int, alighted: int, boarded: int, 
-                       utilization_after: float):
+                   waiting_before: int, alighted: int, boarded: int, 
+                   utilization_after: float):
         """Записывает событие прибытия на остановку"""
         self.stats.stop_log.append({
             'time': time,
@@ -128,6 +128,7 @@ class Tram:
             'waiting_before': waiting_before,
             'alighted': alighted,
             'boarded': boarded,
+            'passengers_in_tram': self.passengers,  
             'utilization_after': utilization_after
         })
 
@@ -159,6 +160,8 @@ class TramSimulation:
             'total_passengers_served': 0,
             'utilization_deviations': [],
             'waiting_time_deviations': [],
+            'total_tram_km': 0.0,   
+            'total_passenger_km': 0.0,
         }
         self.setup_stops()
     def _create_run_directory(self) -> str:
@@ -377,6 +380,9 @@ class TramSimulation:
                         # Едем до остановки
                         hour = int(self.env.now // 60) % 24
                         travel_time = self.calculate_travel_time(distance, hour)
+                        distance_km = distance / 1000.0  # переводим в километры
+                        self.stats['total_tram_km'] += distance_km
+                        self.stats['total_passenger_km'] += distance_km * tram.passengers
                         yield self.env.timeout(travel_time)
                     
                     # Прибываем на остановку
@@ -426,8 +432,8 @@ class TramSimulation:
         viz.create_all_plots(trams=self.trams, output_dir=plots_dir)
         
         print(f"\n{'='*60}")
-        print(f"✓ СИМУЛЯЦИЯ ЗАВЕРШЕНА")
-        print(f"✓ Результаты сохранены: {self.run_dir}/")
+        print(f"СИМУЛЯЦИЯ ЗАВЕРШЕНА")
+        print(f"Результаты сохранены: {self.run_dir}/")
         print(f"{'='*60}\n")
 
     
@@ -440,6 +446,8 @@ class TramSimulation:
         print(f"\nОбщая статистика:")
         print(f"  • Всего обслужено пассажиров: {self.stats['total_passengers_served']}")
         print(f"  • Трамваев в парке: {len(self.all_trams_created)}")
+        print(f"  • Трамвай-километры: {self.stats['total_tram_km']:.1f} км")
+        print(f"  • Пассажиро-километры: {self.stats['total_passenger_km']:.1f} пас⋅км")
         
         if self.stats['utilization_deviations']:
             avg_util_deviation = sum(self.stats['utilization_deviations']) / len(self.stats['utilization_deviations'])

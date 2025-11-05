@@ -42,6 +42,7 @@ class TramLogger:
                 'Ожидало на остановке',
                 'Высадка',
                 'Посадка',
+                'Пассажиров в салоне',
                 'Загруженность (%)'
             ]
             
@@ -57,6 +58,7 @@ class TramLogger:
                     'Ожидало на остановке': event['waiting_before'],
                     'Высадка': event['alighted'],
                     'Посадка': event['boarded'],
+                    'Пассажиров в салоне': event.get('passengers_in_tram', 0), 
                     'Загруженность (%)': f"{event['utilization_after']:.1f}"
                 })
         
