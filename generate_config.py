@@ -28,8 +28,8 @@ def generate_intensity_data(stop_number: int,
             base_intensities.append(base)
     
     time_coefficients = {
-        0: 0.02, 1: 0.01, 2: 0.01, 3: 0.01, 4: 0.02, 5: 0.1,
-        6: 0.8,   # Утро
+        0: 0.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0,
+        6: 0.3,   # Утро
         7: 2.0,   # Час пик - УВЕЛИЧЕНО
         8: 2.5,   # Час пик - УВЕЛИЧЕНО
         9: 1.2,   # После пика
@@ -214,16 +214,6 @@ if __name__ == "__main__":
     # Создаём папку
     ensure_config_dir()
     
-    # Простая конфигурация
-    print("1. Создаём простую тестовую конфигурацию...")
-    create_config(
-        stop_number=5,
-        tram_capacity=90,
-        simulation_hours=2,
-        output_file="tram_config_simple.json"
-    )
-    print()
-    
     # Стандартная конфигурация
     print("2. Создаём стандартную конфигурацию...")
     create_config(
@@ -231,16 +221,6 @@ if __name__ == "__main__":
         tram_capacity=90,
         simulation_hours=24,
         output_file="tram_config.json"
-    )
-    print()
-    
-    # Большая конфигурация
-    print("3. Создаём расширенную конфигурацию...")
-    create_config(
-        stop_number=15,
-        tram_capacity=90,
-        simulation_hours=24,
-        output_file="tram_config_large.json"
     )
     print()
     
