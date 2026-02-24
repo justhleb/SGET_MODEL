@@ -23,3 +23,38 @@ __pycache__/
 # Local config
 config.json
 .env
+README copy.md
+data_sensors/2026-01-01 Сводный отчет .xlsx
+data_sensors/2026-01-02 Сводный отчет .xlsx
+data_sensors/2026-01-03 Сводный отчет .xlsx
+data_sensors/2026-01-04 Сводный отчет .xlsx
+data_sensors/2026-01-05 Сводный отчет .xlsx
+data_sensors/2026-01-06 Сводный отчет .xlsx
+data_sensors/2026-01-07 Сводный отчет .xlsx
+data_sensors/2026-01-08 Сводный отчет .xlsx
+data_sensors/2026-01-09 Сводный отчет .xlsx
+data_sensors/2026-01-10 Сводный отчет .xlsx
+data_sensors/2026-01-11 Сводный отчет .xlsx
+data_sensors/2026-01-12 Сводный отчет.xlsx
+data_sensors/2026-01-13 Сводный отчет.xlsx
+data_sensors/2026-01-14 Сводный отчет.xlsx
+data_sensors/2026-01-15 Сводный отчет.xlsx
+data_sensors/2026-01-16 Сводный отчет.xlsx
+data_sensors/2026-01-17 Сводный отчет.xlsx
+data_sensors/2026-01-18 сводный отчет.xlsx
+data_sensors/2026-01-26 сводный отчет.xlsx
+data_sensors/2026-01-27 Сводный отчет.xlsx
+data_sensors/2026-01-28 Сводный отчет.xlsx
+data_sensors/2026-01-29 Сводный отчет.xlsx
+data_sensors/2026-01-30 Сводный отчет.xlsx
+data_sensors/2026-01-31 Сводный отчет.xlsx
+.gitignore
+passenger_data_cleaned.csv
+passenger_data.xlsx
+.gitignore
+route_stops/route_20_Обратное.csv
+route_stops/route_20_Прямое.csv
+route_stops/route_48_Обратное.csv
+route_stops/route_48_Прямое.csv
+route_stops/route_55_Обратное.csv
+route_stops/route_55_Прямое.csv
