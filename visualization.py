@@ -20,11 +20,11 @@ plt.rcParams["axes.unicode_minus"] = False
 log = logging.getLogger(__name__)
 
 # ─── Дефолтные константы оформления ──────────────────────────────────────────
-_DEFAULT_TARGET_UTIL   = 0.75           # Целевая загруженность (доля)
-_DEFAULT_COMFORT_LOW   = 0.60           # Нижняя граница комфортной зоны
-_DEFAULT_COMFORT_HIGH  = 0.80           # Верхняя граница комфортной зоны
-_DEFAULT_OVERLOAD      = 0.90           # Порог перегруза
-_DEFAULT_PEAK_RANGES   = [(7, 9), (17, 19)]   # Пары (час_начала, час_конца) часов пик
+_DEFAULT_TARGET_UTIL   = 0.75
+_DEFAULT_COMFORT_LOW   = 0.60
+_DEFAULT_COMFORT_HIGH  = 0.80
+_DEFAULT_OVERLOAD      = 0.90
+_DEFAULT_PEAK_RANGES   = [(7, 9), (17, 19)]
 _DPI                   = 150
 
 
@@ -43,32 +43,36 @@ class TramVisualization:
         route_id: Optional[str] = None,
     ):
         self.stops = stops
-        self.stop_number = len(stops)
         self.simulation_hours = simulation_hours
 
-        # Параметры оформления — берутся из конфига симуляции
+        # Реальные ключи словаря stops (могут быть 20001, 20002... или 1, 2...)
+        self.stop_ids: List[int] = sorted(stops.keys())
+        self.stop_number: int = len(self.stop_ids)
+
+        # Локальные номера для подписей: всегда 1, 2, 3... независимо от global_id
+        self.stop_labels: Dict[int, int] = {
+            gid: local
+            for local, gid in enumerate(self.stop_ids, start=1)
+        }
+
         self.target_util   = target_utilization
         self.comfort_low   = comfort_low
         self.comfort_high  = comfort_high
         self.overload      = overload_threshold
         self.peak_ranges   = peak_hour_ranges or _DEFAULT_PEAK_RANGES
-        self.route_id      = route_id   # для подписей при мультимаршрутности
+        self.route_id      = route_id
 
     # ── Вспомогательные методы ────────────────────────────────────────────────
 
     def _title(self, base: str) -> str:
-        """Добавляет route_id к заголовку, если задан."""
         return f"{base} (маршрут {self.route_id})" if self.route_id else base
 
     def _add_peak_spans(self, ax: plt.Axes) -> None:
-        """Рисует вертикальные полосы часов пик на оси."""
         colors = ["red", "orange", "red", "orange"]
-        labels = ["Утренний час пик", "Вечерний час пик"]
         for i, (h_start, h_end) in enumerate(self.peak_ranges):
             ax.axvspan(h_start, h_end, alpha=0.10, color=colors[i % len(colors)])
 
     def _add_peak_labels(self, ax: plt.Axes, y: float) -> None:
-        """Добавляет текстовые подписи часов пик."""
         default_labels = ["Утренний\nчас пик", "Вечерний\nчас пик"]
         for i, (h_start, h_end) in enumerate(self.peak_ranges):
             label = default_labels[i] if i < len(default_labels) else f"Пик {i+1}"
@@ -79,17 +83,12 @@ class TramVisualization:
 
     @staticmethod
     def _hourly_means(history: List[Tuple[float, int]]) -> List[float]:
-        """По waiting_history возвращает список из 24 средних значений по часам."""
         buckets: List[List[float]] = [[] for _ in range(24)]
         for time, count in history:
             buckets[int(time // 60) % 24].append(count)
         return [float(np.mean(b)) if b else 0.0 for b in buckets]
 
     def _build_hourly_util_data(self, trams: Dict) -> Dict[int, List[float]]:
-        """
-        Возвращает {tram_id: [средняя загруженность по часам (0..100)]}.
-        Использует stop_log из stats трамвая.
-        """
         result = {}
         for tram_id, tram in trams.items():
             stop_log = getattr(getattr(tram, "stats", None), "stop_log", None) or []
@@ -121,7 +120,6 @@ class TramVisualization:
             fontsize=16, fontweight="bold"
         )
 
-        # Нормализуем axes до плоского списка
         if self.stop_number == 1:
             axes_flat = [axes]
         elif nrows == 1:
@@ -129,14 +127,15 @@ class TramVisualization:
         else:
             axes_flat = list(axes.flatten())
 
-        for stop_id in range(1, self.stop_number + 1):
+        for idx, stop_id in enumerate(self.stop_ids):
             stop = self.stops[stop_id]
-            ax = axes_flat[stop_id - 1]
+            ax = axes_flat[idx]
+            local_num = self.stop_labels[stop_id]  # читаемый номер: 1, 2, 3...
 
             if not stop.waiting_history:
                 ax.text(0.5, 0.5, "Нет данных",
                         ha="center", va="center", transform=ax.transAxes)
-                ax.set_title(f"Остановка {stop_id}")
+                ax.set_title(f"Остановка {local_num}")
                 continue
 
             times  = [t / 60 for t, _ in stop.waiting_history]
@@ -144,7 +143,7 @@ class TramVisualization:
 
             ax.plot(times, counts, linewidth=1.5, color="steelblue", alpha=0.7)
             ax.fill_between(times, counts, alpha=0.3, color="lightblue")
-            ax.set_title(f"Остановка {stop_id}", fontweight="bold")
+            ax.set_title(f"Остановка {local_num}", fontweight="bold")
             ax.set_xlabel("Время (часы)", fontsize=9)
             ax.set_ylabel("Количество пассажиров", fontsize=9)
             ax.grid(True, alpha=0.3, linestyle="--")
@@ -159,7 +158,6 @@ class TramVisualization:
                 bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
             )
 
-        # Удаляем лишние субплоты
         for idx in range(self.stop_number, len(axes_flat)):
             fig.delaxes(axes_flat[idx])
 
@@ -179,24 +177,27 @@ class TramVisualization:
         log.info("Создание графика ожидания по часам...")
 
         hours = list(range(24))
+        # Ключи — global_stop_id, значения — почасовые средние
         stop_data = {
             stop_id: self._hourly_means(self.stops[stop_id].waiting_history)
-            for stop_id in range(1, self.stop_number + 1)
+            for stop_id in self.stop_ids
         }
 
+        # Для легенды берём каждую вторую или все
         selected = (
-            list(range(1, self.stop_number + 1))
+            self.stop_ids
             if plot_all
-            else list(range(1, self.stop_number + 1, 2))
+            else self.stop_ids[::2]
         )
         colors = plt.cm.tab20(np.linspace(0, 1, max(len(selected), 1)))
 
         fig, ax = plt.subplots(figsize=(14, 8))
         for idx, stop_id in enumerate(selected):
+            local_num = self.stop_labels[stop_id]
             ax.plot(
                 hours, stop_data[stop_id],
                 marker="o", linewidth=2, markersize=4,
-                color=colors[idx], label=f"Остановка {stop_id}",
+                color=colors[idx], label=f"Остановка {local_num}",
             )
 
         ax.set_title(
@@ -211,7 +212,6 @@ class TramVisualization:
 
         self._add_peak_spans(ax)
 
-        # Подписи ПОСЛЕ построения данных — берём актуальный ylim
         all_values = [v for d in stop_data.values() for v in d]
         y_label = max(all_values) * 0.92 if all_values and max(all_values) > 0 else 1.0
         self._add_peak_labels(ax, y_label)
@@ -230,9 +230,8 @@ class TramVisualization:
         log.info("Создание тепловой карты...")
 
         data = np.zeros((self.stop_number, 24))
-        for stop_id in range(1, self.stop_number + 1):
-            hourly = self._hourly_means(self.stops[stop_id].waiting_history)
-            data[stop_id - 1] = hourly
+        for idx, stop_id in enumerate(self.stop_ids):
+            data[idx] = self._hourly_means(self.stops[stop_id].waiting_history)
 
         fig, ax = plt.subplots(figsize=(14, max(8, self.stop_number * 0.4)))
         im = ax.imshow(data, cmap="YlOrRd", aspect="auto", interpolation="nearest")
@@ -240,7 +239,8 @@ class TramVisualization:
         ax.set_xticks(range(24))
         ax.set_xticklabels(range(24))
         ax.set_yticks(range(self.stop_number))
-        ax.set_yticklabels([f"Ост. {i}" for i in range(1, self.stop_number + 1)])
+        # Подписи: локальный номер 1..N
+        ax.set_yticklabels([f"Ост. {self.stop_labels[sid]}" for sid in self.stop_ids])
         ax.set_title(
             self._title("Тепловая карта: количество ожидающих пассажиров"),
             fontsize=14, fontweight="bold",
@@ -281,7 +281,6 @@ class TramVisualization:
             for t in active
         ]
 
-        # Цвета по зонам загруженности
         def _bar_color(u: float) -> str:
             if u >= self.overload * 100:
                 return "red"
@@ -295,7 +294,6 @@ class TramVisualization:
 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
 
-        # ── Средняя загруженность ─────────────────────────────────────────────
         ax1.bar(tram_ids, avg_utils, color=colors, alpha=0.75, edgecolor="black")
         ax1.axhline(
             self.target_util * 100, color="blue", linestyle="--",
@@ -309,16 +307,13 @@ class TramVisualization:
             self.overload * 100, color="red", linestyle=":",
             alpha=0.5, label="Порог перегруза",
         )
-        ax1.set_title(
-            self._title("Средняя загруженность трамваев"), fontweight="bold"
-        )
+        ax1.set_title(self._title("Средняя загруженность трамваев"), fontweight="bold")
         ax1.set_xlabel("ID трамвая")
         ax1.set_ylabel("Загруженность (%)")
         ax1.set_ylim(0, 110)
         ax1.legend()
         ax1.grid(True, alpha=0.3, axis="y")
 
-        # ── Рейсы и пассажиры ─────────────────────────────────────────────────
         trips      = [t.stats.total_trips for t in active]
         passengers = [t.stats.passengers_served for t in active]
 
@@ -328,9 +323,7 @@ class TramVisualization:
             tram_ids, passengers, color="red", marker="o",
             linewidth=2, markersize=6, label="Пассажиры",
         )
-        ax2.set_title(
-            self._title("Рейсы и обслуженные пассажиры"), fontweight="bold"
-        )
+        ax2.set_title(self._title("Рейсы и обслуженные пассажиры"), fontweight="bold")
         ax2.set_xlabel("ID трамвая")
         ax2.set_ylabel("Количество рейсов", color="steelblue")
         ax2_twin.set_ylabel("Обслужено пассажиров", color="red")
@@ -366,7 +359,6 @@ class TramVisualization:
 
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
 
-        # ── График 1: средняя по всему парку ──────────────────────────────────
         ax1.plot(
             hours, avg_util, linewidth=3, color="steelblue",
             marker="o", markersize=6, label="Средняя загруженность",
@@ -393,11 +385,9 @@ class TramVisualization:
         ax1.grid(True, alpha=0.3, linestyle="--")
         ax1.legend(loc="best", fontsize=10)
 
-        # Подписи часов пик — после отрисовки, y = 90% от реального максимума
         y_label = max(avg_util) * 0.90 if max(avg_util) > 0 else 5.0
         self._add_peak_labels(ax1, y_label)
 
-        # ── График 2: каждый второй трамвай по отдельности ────────────────────
         selected = sorted(hourly_data.keys())[::2]
         colors = plt.cm.tab10(np.linspace(0, 1, max(len(selected), 1)))
         for idx, tram_id in enumerate(selected):
@@ -427,7 +417,6 @@ class TramVisualization:
         plt.savefig(output_file, dpi=_DPI, bbox_inches="tight")
         plt.close()
 
-        # Логируем статистику загруженности (не внутри метода построения графика)
         if avg_util:
             log.info(f"  Средняя за сутки:  {np.mean(avg_util):.1f}%")
             log.info(f"  Максимум:          {max(avg_util):.1f}% в {avg_util.index(max(avg_util))}:00")
@@ -447,10 +436,7 @@ class TramVisualization:
         trams: Optional[Dict] = None,
         output_dir: str | Path = ".",
     ) -> List[Path]:
-        """Создаёт все графики и возвращает список путей к файлам.
-
-        Если построение одного из графиков упало — логирует ошибку и продолжает.
-        """
+        """Создаёт все графики. При ошибке одного — логирует и продолжает."""
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
