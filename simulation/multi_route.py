@@ -2,11 +2,14 @@
 MultiRouteSimulation — оркестратор нескольких маршрутов в едином env.
 
 Использование:
-    sim = MultiRouteSimulation(["configs/r20.json", "configs/r48.json"])
+    sim = MultiRouteSimulation({
+        "20": ("configs/route_20_fwd_config.json", "configs/route_20_bwd_config.json"),
+        "48": ("configs/route_48_fwd_config.json", "configs/route_48_bwd_config.json"),
+    })
     sim.run()
 
 Для NSGA-II:
-    sim = MultiRouteSimulation.from_params(base_configs, tram_counts, intervals)
+    sim = MultiRouteSimulation.from_params(route_pairs, tram_counts=[30, 30, 30])
     sim.run(plot_graphs=False, save_logs=False)
     cost = sim.get_objectives()
 """
@@ -27,70 +30,159 @@ from visualization import TramVisualization
 
 log = logging.getLogger(__name__)
 
-OUTPUT_DIR = "outputs"
+OUTPUT_DIR    = "outputs"
+MIN_REST_TIME = 15.0
+
+
+class TramPair:
+    """
+    Пара fwd/bwd маршрутов с тремя Store:
+      pool     — свободные трамваи (депо)
+      fwd_done — трамваи завершившие fwd, ждут разворота
+      bwd_done — трамваи завершившие bwd, ждут отдыха
+    """
+
+    def __init__(
+        self,
+        route_num: str,
+        fwd_config: RouteConfig,
+        bwd_config: RouteConfig,
+        env: simpy.Environment,
+        shared_stops: Dict[int, Stop],
+        tram_count: int,
+        tram_id_offset: int,
+    ):
+        self.route_num = route_num
+        self.env = env
+
+        self.pool     = simpy.Store(env)
+        self.fwd_done = simpy.Store(env)
+        self.bwd_done = simpy.Store(env)
+
+        self.fwd = Route(fwd_config, env, shared_stops,
+                         available_trams=self.pool,
+                         done_store=self.fwd_done)
+        self.bwd = Route(bwd_config, env, shared_stops,
+                         available_trams=self.fwd_done,
+                         done_store=self.bwd_done)
+
+        self.all_trams: List[Tram] = []
+        self._spawn_trams(tram_count, tram_id_offset, fwd_config.tram_capacity)
+
+    def _spawn_trams(self, count: int, id_offset: int, capacity: int):
+        for i in range(count):
+            tram_id = id_offset + i + 1
+            tram = Tram(tram_id, self.route_num, capacity)
+            self.all_trams.append(tram)
+            self.pool.put(tram)
+        log.info(
+            f"[TramPair {self.route_num}] Парк: {count} трамваев "
+            f"(id {id_offset + 1}..{id_offset + count})"
+        )
+
+    def start(self):
+        self.fwd.start()
+        self.bwd.start()
+        self.env.process(self._turnaround_process())
+        self.env.process(self._rest_process())
+
+    def _turnaround_process(self):
+        """fwd завершён → разворот → трамвай доступен для bwd."""
+        turnaround = self.fwd.config.turnaround_time
+        while True:
+            tram = yield self.fwd_done.get()
+            log.info(
+                f"[{self.env.now:.1f}] Трамвай #{tram.tram_id} "
+                f"разворачивается ({turnaround} мин)"
+            )
+            yield self.env.timeout(turnaround)
+            yield self.fwd_done.put(tram)
+
+    def _rest_process(self):
+        """bwd завершён → отдых водителя → трамвай обратно в депо."""
+        rest_time = max(self.fwd.config.min_rest_time, MIN_REST_TIME)
+        while True:
+            tram = yield self.bwd_done.get()
+            log.info(
+                f"[{self.env.now:.1f}] Трамвай #{tram.tram_id} "
+                f"в депо, отдых {rest_time:.0f} мин"
+            )
+            yield self.env.timeout(rest_time)
+            log.info(
+                f"[{self.env.now:.1f}] Трамвай #{tram.tram_id} "
+                f"готов к новому рейсу"
+            )
+            yield self.pool.put(tram)
 
 
 class MultiRouteSimulation:
 
-    def __init__(self, config_files: List[str], run_dir: Optional[str] = None):
+    def __init__(
+        self,
+        route_pairs: Dict[str, Tuple[str, str]],
+        tram_counts: Optional[List[int]] = None,   # [count_r1, count_r2, ...]
+        run_dir: Optional[str] = None,
+    ):
+        """
+        route_pairs:  {"20": ("fwd.json", "bwd.json"), ...}
+        tram_counts:  кол-во трамваев на каждый маршрут в том же порядке.
+                      Если None — равномерно делим DEFAULT_TRAMS_PER_ROUTE.
+        """
         self.env = simpy.Environment()
         self.shared_stops: Dict[int, Stop] = {}
-        self.routes: List[Route] = []
+        self.pairs: List[TramPair] = []
         self.run_dir = run_dir or self._create_run_directory()
 
-        tram_id_offset = 0
-        for cf in config_files:
-            cfg = RouteConfig.from_json(cf)
-            self._register_stops(cfg)
-            route = Route(cfg, self.env, self.shared_stops, tram_id_offset=tram_id_offset)
-            self.routes.append(route)
-            tram_id_offset += cfg.tram_count   # глобально уникальные ID трамваев
+        items = list(route_pairs.items())
+        DEFAULT_PER_ROUTE = 30
 
+        for i, (route_num, (fwd_file, bwd_file)) in enumerate(items):
+            fwd_cfg = RouteConfig.from_json(fwd_file)
+            bwd_cfg = RouteConfig.from_json(bwd_file)
+
+            self._register_stops(fwd_cfg)
+            self._register_stops(bwd_cfg)
+
+            count  = tram_counts[i] if tram_counts else DEFAULT_PER_ROUTE
+            offset = sum(tram_counts[:i]) if tram_counts else i * DEFAULT_PER_ROUTE
+
+            pair = TramPair(
+                route_num=route_num,
+                fwd_config=fwd_cfg,
+                bwd_config=bwd_cfg,
+                env=self.env,
+                shared_stops=self.shared_stops,
+                tram_count=count,
+                tram_id_offset=offset,
+            )
+            self.pairs.append(pair)
+
+        total = sum(tram_counts) if tram_counts else len(items) * DEFAULT_PER_ROUTE
         log.info(
-            f"MultiRouteSimulation: {len(self.routes)} маршрут(а/ов), "
+            f"MultiRouteSimulation: {len(self.pairs)} маршрута, "
+            f"{total} трамваев всего, "
             f"{len(self.shared_stops)} уникальных остановок"
         )
 
-    # ── Фабричный метод для оптимизатора ──────────────────────────────────────
+    # ── Фабричный метод для NSGA-II ───────────────────────────────────────────
 
     @classmethod
     def from_params(
         cls,
-        config_files: List[str],
+        route_pairs: Dict[str, Tuple[str, str]],
         tram_counts: List[int],
-        intervals_override: Optional[List[List[Tuple[int, int]]]] = None,
         run_dir: Optional[str] = None,
     ) -> "MultiRouteSimulation":
         """
-        Создаёт симуляцию с переопределёнными параметрами (для NSGA-II).
+        Создаёт симуляцию с явным распределением трамваев — для NSGA-II.
 
-        tram_counts        — [count_r1, count_r2, ...]
-        intervals_override — [[(start_h, interval_min), ...], ...] или None
+        tram_counts — [count_r1, count_r2, ...] в том же порядке что route_pairs
         """
-        import copy, tempfile, json
-
-        patched_files = []
-        tmp_dir = tempfile.mkdtemp()
-
-        for i, cf in enumerate(config_files):
-            with open(cf, "r", encoding="utf-8") as f:
-                cfg_data = json.load(f)
-
-            cfg_data["tram_count"] = tram_counts[i]
-            if intervals_override and i < len(intervals_override):
-                cfg_data["bus_interval"] = intervals_override[i]
-
-            tmp_path = os.path.join(tmp_dir, f"route_{i}.json")
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(cfg_data, f, ensure_ascii=False)
-            patched_files.append(tmp_path)
-
-        return cls(patched_files, run_dir=run_dir)
+        return cls(route_pairs, tram_counts=tram_counts, run_dir=run_dir)
 
     # ── Регистрация остановок ─────────────────────────────────────────────────
 
     def _register_stops(self, cfg: RouteConfig):
-        """Идемпотентно: создаёт остановку только если её ещё нет в реестре."""
         for stop_id in cfg.stop_ids:
             if stop_id not in self.shared_stops:
                 self.shared_stops[stop_id] = Stop(stop_id, self.env)
@@ -106,47 +198,59 @@ class MultiRouteSimulation:
         return run_dir
 
     def _max_hours(self) -> int:
-        return max(r.config.simulation_hours for r in self.routes)
+        return max(
+            max(p.fwd.config.simulation_hours, p.bwd.config.simulation_hours)
+            for p in self.pairs
+        )
 
-    def _all_trams(self) -> Dict[int, Tram]:
-        result = {}
-        for route in self.routes:
-            result.update(route.trams)
-        return result
+    def _all_trams(self) -> List[Tram]:
+        return [t for p in self.pairs for t in p.all_trams]
 
     # ── Запуск ────────────────────────────────────────────────────────────────
 
     def run(self, plot_graphs: bool = True, save_logs: bool = True):
-        for route in self.routes:
-            route.start()
+        for pair in self.pairs:
+            pair.start()
 
         self.env.run(until=self._max_hours() * 60)
         self._print_stats()
 
         if save_logs:
             logs_dir = os.path.join(self.run_dir, "logs")
-            for route in self.routes:
-                tl = TramLogger(output_dir=os.path.join(logs_dir, route.config.route_id))
-                tl.save_all_trams(route.trams, route_id=route.config.route_id)
-                tl.create_summary(route.trams, route_id=route.config.route_id)
+            for pair in self.pairs:
+                route_logs = os.path.join(logs_dir, pair.route_num)
+                tl = TramLogger(output_dir=route_logs)
+                trams = {t.tram_id: t for t in pair.all_trams}
+                tl.save_all_trams(trams, route_id=pair.route_num)
+                tl.create_summary(trams, route_id=pair.route_num)
+                tl.save_schedule_deviations(trams, route_id=pair.route_num)
 
         if plot_graphs:
             plots_dir = os.path.join(self.run_dir, "plots")
-            for route in self.routes:
-                route_plots = os.path.join(plots_dir, route.config.route_id)
+            for pair in self.pairs:
+                route_plots = os.path.join(plots_dir, pair.route_num)
                 os.makedirs(route_plots, exist_ok=True)
-                viz = TramVisualization(
-                    {sid: self.shared_stops[sid] for sid in route.config.stop_ids
-                     if sid in self.shared_stops},
-                    route.config.simulation_hours,
-                )
-                viz.create_all_plots(trams=route.trams, output_dir=route_plots)
 
-    # ── Метрики для оптимизатора ──────────────────────────────────────────────
+                combined_stops = {
+                    sid: self.shared_stops[sid]
+                    for route in (pair.fwd, pair.bwd)
+                    for sid in route.config.stop_ids
+                    if sid in self.shared_stops
+                }
+                viz = TramVisualization(
+                    combined_stops,
+                    max(pair.fwd.config.simulation_hours,
+                        pair.bwd.config.simulation_hours),
+                    route_id=pair.route_num,
+                )
+                trams = {t.tram_id: t for t in pair.all_trams}
+                viz.create_all_plots(trams=trams, output_dir=route_plots)
+
+    # ── Метрики ───────────────────────────────────────────────────────────────
 
     def get_objectives(self) -> Tuple[float, float]:
         """
-        Возвращает (total_avg_waiting_time, total_tram_km) — две цели NSGA-II.
+        Возвращает (avg_waiting_time, total_tram_km) — две цели NSGA-II.
         Минимизируются обе.
         """
         total_wait = sum(
@@ -154,50 +258,49 @@ class MultiRouteSimulation:
             for s in self.shared_stops.values()
             if s.passengers_served > 0
         )
-        total_served = sum(
-            s.passengers_served for s in self.shared_stops.values()
-        )
+        total_served = sum(s.passengers_served for s in self.shared_stops.values())
         avg_wait = total_wait / total_served if total_served > 0 else 0.0
-        total_km = sum(r.stats.total_tram_km for r in self.routes)
+        total_km = sum(
+            r.stats.total_tram_km
+            for p in self.pairs
+            for r in (p.fwd, p.bwd)
+        )
         return avg_wait, total_km
 
     def get_full_stats(self) -> dict:
         avg_wait, total_km = self.get_objectives()
-        return {
-            "routes": {
-                r.config.route_id: {
-                    "passengers_served": r.stats.total_passengers_served,
-                    "tram_km": r.stats.total_tram_km,
-                    "passenger_km": r.stats.total_passenger_km,
+        routes_stats = {}
+        for pair in self.pairs:
+            for route in (pair.fwd, pair.bwd):
+                devs = route.stats.utilization_deviations
+                routes_stats[route.config.route_id] = {
+                    "passengers_served":         route.stats.total_passengers_served,
+                    "tram_km":                   route.stats.total_tram_km,
+                    "passenger_km":              route.stats.total_passenger_km,
                     "avg_utilization_deviation": (
-                        sum(r.stats.utilization_deviations) / len(r.stats.utilization_deviations)
-                        if r.stats.utilization_deviations else 0.0
+                        sum(devs) / len(devs) if devs else 0.0
                     ),
                 }
-                for r in self.routes
-            },
+        return {
+            "routes": routes_stats,
             "global": {
                 "avg_waiting_time_min": avg_wait,
-                "total_tram_km": total_km,
-                "unique_stops": len(self.shared_stops),
-            }
+                "total_tram_km":        total_km,
+                "unique_stops":         len(self.shared_stops),
+            },
         }
-
-    # ── Вывод статистики ──────────────────────────────────────────────────────
 
     def _print_stats(self):
         log.info(f"\n{'='*60}")
         log.info("РЕЗУЛЬТАТЫ МУЛЬТИМАРШРУТНОЙ СИМУЛЯЦИИ")
         log.info(f"{'='*60}")
         stats = self.get_full_stats()
-
         for route_id, rs in stats["routes"].items():
             log.info(f"\nМаршрут {route_id}:")
-            log.info(f"  • Пассажиры:         {rs['passengers_served']}")
-            log.info(f"  • Трамвай-км:        {rs['tram_km']:.1f}")
-            log.info(f"  • Пассажиро-км:      {rs['passenger_km']:.1f}")
+            log.info(f"  • Пассажиры:           {rs['passengers_served']}")
+            log.info(f"  • Трамвай-км:          {rs['tram_km']:.1f}")
+            log.info(f"  • Пассажиро-км:        {rs['passenger_km']:.1f}")
             log.info(f"  • Откл. загруженности: {rs['avg_utilization_deviation']:.2%}")
-
         g = stats["global"]
         log.info(f"\nГлобально:")
         log.info(f"  • Ср. время ожидания: {g['avg_waiting_time_min']:.2f} мин")

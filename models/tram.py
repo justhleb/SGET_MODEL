@@ -6,7 +6,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List
 
-# ── Константы логики посадки/высадки ──────────────────────────────────────────
 BASE_ALIGHT_RATE     = 0.20
 PEAK_ALIGHT_MULT     = 2.0
 END_BONUS_MAX        = 0.30
@@ -22,10 +21,10 @@ class TramStats:
     total_trips: int = 0
     utilization_history: List[float] = field(default_factory=list)
     stop_log: List[dict] = field(default_factory=list)
+    schedule_deviations: List[dict] = field(default_factory=list)
 
 
 class Tram:
-    """Трамвай. Принадлежит конкретному маршруту (route_id фиксирован)."""
 
     def __init__(self, tram_id: int, route_id: str, capacity: int):
         self.tram_id = tram_id
@@ -49,11 +48,6 @@ class Tram:
         return can_board
 
     def alight_passengers(self, stop_index: int, total_stops: int, peak_stop_index: int) -> int:
-        """
-        stop_index      — позиция в маршруте (1-based)
-        total_stops     — общее число остановок маршрута
-        peak_stop_index — позиция популярной остановки (1-based)
-        """
         if self.passengers == 0:
             return 0
 
@@ -90,15 +84,37 @@ class Tram:
         alighted: int,
         boarded: int,
         utilization_after: float,
+        trip_id: int = 0,           # ✅ новое
+        planned_time: float = None, # ✅ новое
     ):
+        delay = round(time - planned_time, 4) if planned_time is not None else None
         self.stats.stop_log.append({
-            "time": time,
-            "route_id": self.route_id,
-            "stop_id": stop_id,
-            "direction": direction,
-            "waiting_before": waiting_before,
-            "alighted": alighted,
-            "boarded": boarded,
+            "time":               time,
+            "route_id":           self.route_id,
+            "trip_id":            trip_id,
+            "stop_id":            stop_id,
+            "direction":          direction,
+            "planned_time":       planned_time,
+            "delay_min":          delay,
+            "waiting_before":     waiting_before,
+            "alighted":           alighted,
+            "boarded":            boarded,
             "passengers_in_tram": self.passengers,
-            "utilization_after": utilization_after,
+            "utilization_after":  utilization_after,
+        })
+
+    def log_schedule_deviation(
+        self,
+        stop_id: int,
+        planned_time: float,
+        actual_time: float,
+        delay: float,
+    ):
+        self.stats.schedule_deviations.append({
+            "tram_id":      self.tram_id,
+            "route_id":     self.route_id,
+            "stop_id":      stop_id,
+            "planned_time": planned_time,
+            "actual_time":  actual_time,
+            "delay_min":    delay,
         })
