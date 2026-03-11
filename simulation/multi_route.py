@@ -131,7 +131,7 @@ class MultiRouteSimulation:
         self.env = simpy.Environment()
         self.shared_stops: Dict[int, Stop] = {}
         self.pairs: List[TramPair] = []
-        self.run_dir = run_dir or self._create_run_directory()
+        self.run_dir = run_dir
 
         items = list(route_pairs.items())
         DEFAULT_PER_ROUTE = 30
@@ -215,7 +215,7 @@ class MultiRouteSimulation:
         self.env.run(until=self._max_hours() * 60)
         self._print_stats()
 
-        if save_logs:
+        if save_logs and self.run_dir:
             logs_dir = os.path.join(self.run_dir, "logs")
             for pair in self.pairs:
                 route_logs = os.path.join(logs_dir, pair.route_num)
@@ -225,7 +225,7 @@ class MultiRouteSimulation:
                 tl.create_summary(trams, route_id=pair.route_num)
                 tl.save_schedule_deviations(trams, route_id=pair.route_num)
 
-        if plot_graphs:
+        if plot_graphs and self.run_dir:
             plots_dir = os.path.join(self.run_dir, "plots")
             for pair in self.pairs:
                 route_plots = os.path.join(plots_dir, pair.route_num)
@@ -281,10 +281,10 @@ class MultiRouteSimulation:
         ]
         schedule_mae = sum(all_delays) / len(all_delays) if all_delays else 0.0
 
-        return avg_wait, total_km, schedule_mae
+        return avg_wait, total_km, schedule_mae, total_served
 
     def get_full_stats(self) -> dict:
-        avg_wait, total_km, schedule_mae = self.get_objectives()
+        avg_wait, total_km, schedule_mae, total_served = self.get_objectives()
         routes_stats = {}
         for pair in self.pairs:
             for route in (pair.fwd, pair.bwd):
