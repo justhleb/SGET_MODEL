@@ -226,8 +226,11 @@ pool (депо) → [fwd прогон] → fwd_done → [разворот] → [
 - `MultiRouteSimulation.__init__()` — принимает `route_pairs` (dict) и `tram_counts` (list)
 - `MultiRouteSimulation.from_params()` — фабричный метод для NSGA-II оптимизатора
 - `MultiRouteSimulation.run()` — запуск симуляции, сохранение логов и графиков
-- `MultiRouteSimulation.get_objectives()` — возвращает `(avg_waiting_time, total_tram_km)` для оптимизатора
-- `MultiRouteSimulation.get_full_stats()` — полная статистика по всем маршрутам
+- `MultiRouteSimulation.get_objectives()` — возвращает `(avg_waiting_time, total_tram_km, schedule_mae)` для оптимизатора NSGA-II.    Минимизируются все три:
+    - `avg_waiting_time` — среднее время ожидания пассажиров (мин), взвешенное по числу обслуженных
+    - `total_tram_km` — суммарный пробег всего парка (прокси эксплуатационных затрат)
+    - `schedule_mae` — среднее абсолютное отклонение от расписания по всем маршрутам (мин)
+- `MultiRouteSimulation.get_full_stats()` — полная статистика по всем маршрутам, включая `schedule_mae_min` по каждому направлению отдельно
 
 ### 4.5 simulation/runner.py
 

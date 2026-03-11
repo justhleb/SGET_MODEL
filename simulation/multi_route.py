@@ -248,31 +248,57 @@ class MultiRouteSimulation:
 
     # ── Метрики ───────────────────────────────────────────────────────────────
 
-    def get_objectives(self) -> Tuple[float, float]:
+    def get_objectives(self) -> Tuple[float, float, float]:
         """
-        Возвращает (avg_waiting_time, total_tram_km) — две цели NSGA-II.
-        Минимизируются обе.
+        Возвращает (avg_waiting_time, total_tram_km, schedule_mae) — три цели NSGA-II.
+        Минимизируются все три.
+
+        schedule_mae — среднее абсолютное отклонение от расписания (мин).
+        Считается по всем трамваям всех маршрутов.
         """
-        total_wait = sum(
+        # avg_waiting_time
+        total_wait   = sum(
             s.avg_waiting_time * s.passengers_served
             for s in self.shared_stops.values()
             if s.passengers_served > 0
         )
         total_served = sum(s.passengers_served for s in self.shared_stops.values())
-        avg_wait = total_wait / total_served if total_served > 0 else 0.0
+        avg_wait     = total_wait / total_served if total_served > 0 else 0.0
+
+        # total_tram_km
         total_km = sum(
             r.stats.total_tram_km
             for p in self.pairs
             for r in (p.fwd, p.bwd)
         )
-        return avg_wait, total_km
+
+        # schedule_mae — MAE по всем schedule_deviations всех трамваев
+        all_delays = [
+            abs(d["delay_min"])
+            for p in self.pairs
+            for t in p.all_trams
+            for d in t.stats.schedule_deviations
+        ]
+        schedule_mae = sum(all_delays) / len(all_delays) if all_delays else 0.0
+
+        return avg_wait, total_km, schedule_mae
 
     def get_full_stats(self) -> dict:
-        avg_wait, total_km = self.get_objectives()
+        avg_wait, total_km, schedule_mae = self.get_objectives()
         routes_stats = {}
         for pair in self.pairs:
             for route in (pair.fwd, pair.bwd):
                 devs = route.stats.utilization_deviations
+
+                # MAE по конкретному маршруту
+                route_delays = [
+                    abs(d["delay_min"])
+                    for t in pair.all_trams
+                    for d in t.stats.schedule_deviations
+                    if d["route_id"] == route.config.route_id
+                ]
+                route_mae = sum(route_delays) / len(route_delays) if route_delays else 0.0
+
                 routes_stats[route.config.route_id] = {
                     "passengers_served":         route.stats.total_passengers_served,
                     "tram_km":                   route.stats.total_tram_km,
@@ -280,15 +306,18 @@ class MultiRouteSimulation:
                     "avg_utilization_deviation": (
                         sum(devs) / len(devs) if devs else 0.0
                     ),
+                    "schedule_mae_min":          route_mae,   # ← новое
                 }
         return {
             "routes": routes_stats,
             "global": {
                 "avg_waiting_time_min": avg_wait,
                 "total_tram_km":        total_km,
+                "schedule_mae_min":     schedule_mae,   # ← новое
                 "unique_stops":         len(self.shared_stops),
             },
         }
+
 
     def _print_stats(self):
         log.info(f"\n{'='*60}")
@@ -306,4 +335,5 @@ class MultiRouteSimulation:
         log.info(f"  • Ср. время ожидания: {g['avg_waiting_time_min']:.2f} мин")
         log.info(f"  • Всего трамвай-км:   {g['total_tram_km']:.1f}")
         log.info(f"  • Уникальных ост.:    {g['unique_stops']}")
+        log.info(f"  • MAE расписания:     {g['schedule_mae_min']:.2f} мин")
         log.info(f"{'='*60}\n")
