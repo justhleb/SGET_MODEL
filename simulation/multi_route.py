@@ -120,18 +120,20 @@ class MultiRouteSimulation:
     def __init__(
         self,
         route_pairs: Dict[str, Tuple[str, str]],
-        tram_counts: Optional[List[int]] = None,   # [count_r1, count_r2, ...]
+        tram_counts: Optional[List[int]] = None,
         run_dir: Optional[str] = None,
+        silent: bool = False,   # True — оптимизатор, папка не создаётся
     ):
-        """
-        route_pairs:  {"20": ("fwd.json", "bwd.json"), ...}
-        tram_counts:  кол-во трамваев на каждый маршрут в том же порядке.
-                      Если None — равномерно делим DEFAULT_TRAMS_PER_ROUTE.
-        """
         self.env = simpy.Environment()
         self.shared_stops: Dict[int, Stop] = {}
         self.pairs: List[TramPair] = []
-        self.run_dir = run_dir
+
+        if silent:
+            self.run_dir = None
+        elif run_dir is not None:
+            self.run_dir = run_dir
+        else:
+            self.run_dir = self._create_run_directory()
 
         items = list(route_pairs.items())
         DEFAULT_PER_ROUTE = 30
@@ -174,11 +176,10 @@ class MultiRouteSimulation:
         run_dir: Optional[str] = None,
     ) -> "MultiRouteSimulation":
         """
-        Создаёт симуляцию с явным распределением трамваев — для NSGA-II.
-
-        tram_counts — [count_r1, count_r2, ...] в том же порядке что route_pairs
+        Создаёт симуляцию для NSGA-II — без создания папок на диске.
         """
-        return cls(route_pairs, tram_counts=tram_counts, run_dir=run_dir)
+        return cls(route_pairs, tram_counts=tram_counts,
+                   run_dir=run_dir, silent=True)
 
     # ── Регистрация остановок ─────────────────────────────────────────────────
 
@@ -248,16 +249,15 @@ class MultiRouteSimulation:
 
     # ── Метрики ───────────────────────────────────────────────────────────────
 
-    def get_objectives(self) -> Tuple[float, float, float]:
+    def get_objectives(self) -> Tuple[float, float, float, int]:
         """
-        Возвращает (avg_waiting_time, total_tram_km, schedule_mae) — три цели NSGA-II.
-        Минимизируются все три.
+        Возвращает (avg_waiting_time, total_tram_km, schedule_mae, total_served).
 
-        schedule_mae — среднее абсолютное отклонение от расписания (мин).
-        Считается по всем трамваям всех маршрутов.
+        total_tram_km  — максимизируем (транспортная работа по контракту)
+        schedule_mae   — минимизируем (точность расписания)
+        total_served   — максимизируем (обслуженные пассажиры)
         """
-        # avg_waiting_time
-        total_wait   = sum(
+        total_wait = sum(
             s.avg_waiting_time * s.passengers_served
             for s in self.shared_stops.values()
             if s.passengers_served > 0
@@ -265,14 +265,12 @@ class MultiRouteSimulation:
         total_served = sum(s.passengers_served for s in self.shared_stops.values())
         avg_wait     = total_wait / total_served if total_served > 0 else 0.0
 
-        # total_tram_km
         total_km = sum(
             r.stats.total_tram_km
             for p in self.pairs
             for r in (p.fwd, p.bwd)
         )
 
-        # schedule_mae — MAE по всем schedule_deviations всех трамваев
         all_delays = [
             abs(d["delay_min"])
             for p in self.pairs
@@ -289,8 +287,6 @@ class MultiRouteSimulation:
         for pair in self.pairs:
             for route in (pair.fwd, pair.bwd):
                 devs = route.stats.utilization_deviations
-
-                # MAE по конкретному маршруту
                 route_delays = [
                     abs(d["delay_min"])
                     for t in pair.all_trams
@@ -298,7 +294,6 @@ class MultiRouteSimulation:
                     if d["route_id"] == route.config.route_id
                 ]
                 route_mae = sum(route_delays) / len(route_delays) if route_delays else 0.0
-
                 routes_stats[route.config.route_id] = {
                     "passengers_served":         route.stats.total_passengers_served,
                     "tram_km":                   route.stats.total_tram_km,
@@ -306,18 +301,18 @@ class MultiRouteSimulation:
                     "avg_utilization_deviation": (
                         sum(devs) / len(devs) if devs else 0.0
                     ),
-                    "schedule_mae_min":          route_mae,   # ← новое
+                    "schedule_mae_min":          route_mae,
                 }
         return {
             "routes": routes_stats,
             "global": {
                 "avg_waiting_time_min": avg_wait,
                 "total_tram_km":        total_km,
-                "schedule_mae_min":     schedule_mae,   # ← новое
+                "schedule_mae_min":     schedule_mae,
+                "total_served":         total_served,
                 "unique_stops":         len(self.shared_stops),
             },
         }
-
 
     def _print_stats(self):
         log.info(f"\n{'='*60}")
@@ -334,6 +329,7 @@ class MultiRouteSimulation:
         log.info(f"\nГлобально:")
         log.info(f"  • Ср. время ожидания: {g['avg_waiting_time_min']:.2f} мин")
         log.info(f"  • Всего трамвай-км:   {g['total_tram_km']:.1f}")
+        log.info(f"  • Обслужено пасс.:    {g['total_served']}")
         log.info(f"  • Уникальных ост.:    {g['unique_stops']}")
         log.info(f"  • MAE расписания:     {g['schedule_mae_min']:.2f} мин")
         log.info(f"{'='*60}\n")

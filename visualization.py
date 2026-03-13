@@ -26,6 +26,9 @@ _DEFAULT_COMFORT_HIGH  = 0.80
 _DEFAULT_OVERLOAD      = 0.90
 _DEFAULT_PEAK_RANGES   = [(7, 9), (17, 19)]
 _DPI                   = 150
+HOUR_START  = 5   # начало операционного дня
+HOUR_END    = 24  # конец (0 = полночь следующего дня)
+_OP_HOURS   = list(range(HOUR_START, HOUR_END))
 
 
 class TramVisualization:
@@ -181,9 +184,9 @@ class TramVisualization:
         output_file = Path(output_file)
         log.info("Создание графика ожидания по часам...")
 
-        hours = list(range(24))
+        hours = _OP_HOURS
         stop_data = {
-            stop_id: self._hourly_means(self.stops[stop_id].waiting_history)
+            stop_id: self._hourly_means(self.stops[stop_id].waiting_history)[HOUR_START:]
             for stop_id in self.stop_ids
         }
 
@@ -227,15 +230,16 @@ class TramVisualization:
         output_file = Path(output_file)
         log.info("Создание тепловой карты...")
 
-        data = np.zeros((self.stop_number, 24))
+        data = np.zeros((self.stop_number, len(_OP_HOURS)))
         for idx, stop_id in enumerate(self.stop_ids):
-            data[idx] = self._hourly_means(self.stops[stop_id].waiting_history)
+            full = self._hourly_means(self.stops[stop_id].waiting_history)
+            data[idx] = full[HOUR_START:]
 
         fig, ax = plt.subplots(figsize=(14, max(8, self.stop_number * 0.4)))
         im = ax.imshow(data, cmap="YlOrRd", aspect="auto", interpolation="nearest")
 
-        ax.set_xticks(range(24))
-        ax.set_xticklabels(range(24))
+        ax.set_xticks(range(len(_OP_HOURS)))
+        ax.set_xticklabels(_OP_HOURS)
         ax.set_yticks(range(self.stop_number))
         ax.set_yticklabels([f"Ост. {self.stop_labels[sid]}" for sid in self.stop_ids])
         ax.set_title(
@@ -335,7 +339,7 @@ class TramVisualization:
             log.warning("Нет данных для графика загруженности по часам — пропускаем")
             return output_file
 
-        hours = list(range(24))
+        hours = _OP_HOURS
         avg_util = []
         for hour in hours:
             vals = [hourly_data[tid][hour] for tid in hourly_data if hourly_data[tid][hour] > 0]
@@ -478,7 +482,7 @@ class TramVisualization:
             hour = int(d["planned_time"] // 60) % 24
             hourly_delays[hour].append(d["delay_min"])
 
-        hours     = list(range(24))
+        hours     = _OP_HOURS
         means     = [float(np.mean(hourly_delays[h])) if hourly_delays[h] else 0.0
                      for h in hours]
         stds      = [float(np.std(hourly_delays[h]))  if hourly_delays[h] else 0.0
@@ -548,11 +552,11 @@ class TramVisualization:
             if sid in delay_matrix:
                 delay_matrix[sid][hour].append(d["delay_min"])
 
-        data = np.zeros((self.stop_number, 24))
+        data = np.zeros((self.stop_number, len(_OP_HOURS)))
         for idx, sid in enumerate(self.stop_ids):
-            for h in range(24):
+            for col, h in enumerate(_OP_HOURS):
                 vals = delay_matrix[sid][h]
-                data[idx, h] = float(np.mean(vals)) if vals else 0.0
+                data[idx, col] = float(np.mean(vals)) if vals else 0.0
 
         # Симметричная цветовая шкала: красный = опоздание, синий = опережение
         vmax = max(abs(data.min()), abs(data.max()), 1.0)
@@ -561,8 +565,8 @@ class TramVisualization:
         im = ax.imshow(data, cmap="RdBu_r", aspect="auto",
                        interpolation="nearest", vmin=-vmax, vmax=vmax)
 
-        ax.set_xticks(range(24))
-        ax.set_xticklabels(range(24))
+        ax.set_xticks(range(len(_OP_HOURS)))
+        ax.set_xticklabels(_OP_HOURS)
         ax.set_yticks(range(self.stop_number))
         ax.set_yticklabels([f"Ост. {self.stop_labels[sid]}" for sid in self.stop_ids])
         ax.set_title(
